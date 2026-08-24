@@ -88,12 +88,71 @@ IEC 62264** for the equipment-hierarchy naming, and **REA** (McCarthy, 1982 — 
 academic accounting model) for the paired-flow duality concept. Neither contributed
 code. See `NOTICE`.
 
+## Accounts payable
+
+Matching an invoice says whether it is *correct*. The subledger says what is **owed**:
+
+```sql
+SELECT * FROM payable_open WHERE settlement_state <> 'settled';
+SELECT * FROM payable_aging(DATE '2026-03-31');   -- as at, not now()
+```
+
+`payable_obligation` is a liability accepted; `payable_settlement` is an append-only
+event that discharges part of one. There is **no balance column and no status column** —
+outstanding is gross minus settlements, computed on read, so there is one definition and
+nothing to reconcile. A credit note is a negative obligation rather than a special case,
+which keeps every balance query a `SUM`. A reversal is a negative settlement, so a
+disputed payment keeps its history instead of being edited away.
+
+Aging takes the date as an argument. An aging report that cannot be run "as at month
+end" is not an aging report, and hardcoding `now()` makes the past unreproducible.
+
+Deliberately excluded: general ledger, journals, chart of accounts. This is the
+subledger; posting a summary into a GL is an integration.
+
+## Upgrading
+
+`docs/03_schema.sql` is a design artifact: it is written to be read, and it recreates
+from nothing. A database with data in it needs a different path, so migrations are
+separate:
+
+```bash
+bash infra/migrate.sh            # apply anything pending
+bash infra/migrate.sh --status   # what is applied, what is not
+bash infra/migrate.sh --dry-run  # what would run
+```
+
+Forward-only, each migration in a transaction with the row recording it, so a failure
+leaves the previous version rather than a half-migrated database. An applied migration
+is immutable — its checksum is recorded and `migrate.sh` refuses to continue if the
+file changes underneath it. `tests/test_migrations.py` builds a database each way and
+fails if the migrations and the reference schema have drifted, so the document keeps
+describing the database.
+
 ## Status
 
-Early. The schema runs and its invariants are tested, but it has not carried production
-load and the indexes are untuned. Known gaps are listed at the end of
-`docs/12_open_core.md` rather than hidden — including the absent ontology-drift check,
-the missing bitemporal convenience views, and the fact that production verbs
+Early, and specifically:
+
+**Measured** (`infra/loadtest.py`, 500,000 flow events, PostgreSQL 16):
+
+| query | before | after |
+|---|---|---|
+| ledger head — runs on **every** write | 29.9 ms, seq scan | 0.0 ms, index |
+| events by type, recent first | 0.0 ms, index | 0.0 ms, index |
+| events by correlation id | 0.0 ms, index | 0.0 ms, index |
+| sequence range (audit export) | 13.2 ms, seq scan | 0.2 ms, index |
+
+The head lookup mattered most: it reads `prev_hash` on every append, so scanning meant
+write cost grew with history and the system got slower the longer it was used. Migration
+002 indexes it. 30 ms was survivable; the *shape* was not.
+
+**Not measured, and you should assume nothing:** concurrent writers, lock contention,
+vacuum behaviour under sustained load, anything above 500k events, and every table other
+than `flow_event`. There is no benchmark for multi-tenant query interference under RLS.
+This has never carried production traffic.
+
+Other known gaps are listed at the end of `docs/12_open_core.md` rather than hidden —
+including the missing bitemporal convenience views and the fact that production verbs
 (`report_production`, `issue_to_job`) are not yet in the command layer.
 
 Dependencies: `psycopg`. That is the whole list, and it is enforced by an allowlist in
