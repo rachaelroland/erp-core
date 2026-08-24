@@ -1,0 +1,39 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright 2026 Applied Industrials
+-- =====================================================================
+-- 002 — index the flow ledger's sequence
+--
+-- WHY
+--
+-- Every ledger write reads the current head to find prev_hash:
+--
+--     SELECT entry_hash FROM flow_event ORDER BY sequence_no DESC LIMIT 1
+--
+-- With no index on sequence_no that is a sequential scan, so the cost of
+-- appending to the ledger grows with the length of the ledger. An
+-- append-only system of record that gets slower the longer it is used has
+-- a scaling problem built into its most common operation.
+--
+-- Measured with infra/loadtest.py before adding this:
+--
+--     500,000 events   29.9 ms   Seq Scan
+--
+-- 30 ms per write is tolerable; the shape is not. At ten times the history
+-- it is ~300 ms, and the fix at that point requires building an index on
+-- the largest table in the database.
+--
+-- The same index serves sequence-range reads, which an audit export does
+-- (ISO 21378 asks for exactly that kind of extract).
+--
+-- DESCENDING because the head lookup is the hot path. Postgres can scan a
+-- btree in either direction, so range queries are unaffected.
+--
+-- CONCURRENTLY is deliberately NOT used: it cannot run inside a
+-- transaction, and infra/migrate.sh wraps each migration in one so that a
+-- failure cannot leave the database half-migrated. On a large existing
+-- table, build this by hand with CONCURRENTLY outside the migration and
+-- record 002 as applied.
+-- =====================================================================
+
+CREATE INDEX IF NOT EXISTS flow_event_sequence_idx
+    ON flow_event (sequence_no DESC);
