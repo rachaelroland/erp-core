@@ -31,7 +31,12 @@ BEGIN
             ('inventory_quantum', 'condition',   'inventory_condition'),
             ('inventory_quantum', 'ownership',   'inventory_ownership'),
             ('inventory_quantum', 'encumbrance', 'inventory_encumbrance'),
-            ('assertion',         'method',      'assertion_method')
+            ('assertion',         'method',      'assertion_method'),
+            -- Added with migration 004. Both columns carried a comment
+            -- naming the §02 vocabulary and no constraint at all.
+            ('inspection',        'disposition', 'quality_disposition'),
+            ('nonconformance',    'disposition', 'quality_disposition'),
+            ('nonconformance',    'corrective_action_state', 'corrective_action_state')
         ) AS t(table_name, column_name, vocabulary)
     LOOP
         SELECT string_agg(quote_literal(term), ', ' ORDER BY term)
